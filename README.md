@@ -159,3 +159,16 @@ php artisan redis-streams:work "App\Streams\BillingConsumer" --once --consumer=w
 | `max_deliveries` | `REDIS_STREAM_MAX_DELIVERIES` | `5` |
 
 Override any of those on the consumer class with `$block`, `$count`, `$claimAfter`, `$maxDeliveries`, or `$start`.
+
+## Contributing
+
+Bug reports and pull requests are welcome on [GitHub](https://github.com/bhamner/laravel-redis-streams).
+
+Open an [issue](https://github.com/bhamner/laravel-redis-streams/issues) for a bug. Include the Laravel and Redis versions, whether you use PhpRedis or Predis, and the smallest snippet that shows the failure.
+
+To send a change:
+
+1. Fork the repository and create a branch.
+2. Add or update a test when the change affects behavior.
+3. Run `vendor/bin/phpunit`. The suite needs PHP 8.2 or newer.
+4. Open a pull request against `main` and describe what the change does.
