@@ -1,23 +1,16 @@
 # Laravel Redis Streams
 
-A Composer package for [Redis Streams](https://redis.io/docs/latest/develop/data-types/streams/) consumer groups. Publishing an entry feels like `Model::create`. Reading a group feels like `queue:work`: one consumer in the group gets each new entry, and entries stay pending until they are acknowledged.
+A Composer package for [Redis Streams](https://redis.io/docs/latest/develop/data-types/streams/) consumer groups. `create()` appends an entry. A group delivers each new entry to one consumer, and the entry stays pending until that consumer calls `ack()`.
 
 Laravel's Redis connection already forwards the raw commands (`XADD`, `XREADGROUP`, `XACK`, `XAUTOCLAIM`, and the rest). This package is the fluent layer on top of them. It works with both the PhpRedis extension and Predis, and it keeps your configured Redis key prefix.
 
 ## Install
 
-Submit this repository to [Packagist](https://packagist.org/packages/submit) once, then:
-
 ```bash
 composer require bhamner/laravel-redis-streams
 ```
 
-Until it is on Packagist, point Composer at the GitHub repository:
-
-```bash
-composer config repositories.bhamner/laravel-redis-streams vcs https://github.com/bhamner/laravel-redis-streams
-composer require bhamner/laravel-redis-streams:dev-main
-```
+The package is on [Packagist](https://packagist.org/packages/bhamner/laravel-redis-streams).
 
 Laravel discovers the service provider. Publish the config if you want to change the connection or worker defaults:
 
@@ -28,8 +21,6 @@ php artisan vendor:publish --tag=redis-streams-config
 The package uses the Redis connection named in `REDIS_STREAM_CONNECTION` (`default` when unset).
 
 ## Append entries
-
-Like creating a row:
 
 ```php
 use Bhamner\RedisStreams\Facades\RedisStream;
@@ -43,7 +34,7 @@ $entry = RedisStream::on('orders')->add([
 $entry->id; // Redis id, such as 1710000000000-0
 ```
 
-Or give the stream a class, the way a model names its table:
+A stream class sets the Redis key:
 
 ```php
 use Bhamner\RedisStreams\Stream;
@@ -70,7 +61,7 @@ OrderStream::query()->add(['type' => 'order.placed'], maxLength: 10000);
 
 ## Typed events
 
-Like dispatching a job, with the class name and public properties stored on the stream:
+`dispatch()` stores the class name and its public properties on the stream:
 
 ```php
 use Bhamner\RedisStreams\StreamEvent;
@@ -93,7 +84,7 @@ OrderPlaced::dispatch(orderId: '123', total: 4900);
 
 ## Consumer groups
 
-A group is the queue. Each new entry is delivered to one consumer in the group. `ack()` is the successful delete. Until then the entry stays in the pending list and another worker can claim it.
+Each new entry is delivered to one consumer in the group. It stays in the pending list until `ack()`. Another consumer can claim it with `claimIdle()` after the idle time has passed.
 
 ```php
 $entry = OrderStream::group('billing')
@@ -119,14 +110,14 @@ Pending work and idle claims:
 $summary = OrderStream::group('billing')->summary();
 $waiting = OrderStream::group('billing')->pending();
 
-$stolen = OrderStream::group('billing')
+$claimed = OrderStream::group('billing')
     ->consumer('worker-2')
     ->claimIdle(minIdleMilliseconds: 60_000);
 ```
 
 ## A worker
 
-Subclass `Consumer` the way you would subclass a job. `redis-streams:work` loops: claim entries that have been pending too long, read new ones, call `handle`, and acknowledge on success. An exception leaves the entry pending so another attempt can claim it. After `max_deliveries` (default 5) the worker calls `failed()` and acknowledges it so the group does not retry it forever.
+Extend `Consumer` and run it with `redis-streams:work`. The command claims entries that have been pending longer than `claim_after`, reads new ones, calls `handle`, and acknowledges on success. An exception leaves the entry pending. After `max_deliveries` (default 5) the worker calls `failed()` and acknowledges the entry.
 
 ```php
 use Bhamner\RedisStreams\Consumer;
