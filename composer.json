@@ -1,0 +1,48 @@
+{
+    "name": "bhamner/laravel-redis-streams",
+    "description": "Eloquent- and queue-style API for Redis Streams consumer groups.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["laravel", "redis", "streams", "consumer-groups"],
+    "authors": [
+        {
+            "name": "bhamner",
+            "homepage": "https://github.com/bhamner"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "illuminate/console": "^11.0|^12.0|^13.0",
+        "illuminate/redis": "^11.0|^12.0|^13.0",
+        "illuminate/support": "^11.0|^12.0|^13.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^9.0|^10.0|^11.0",
+        "phpunit/phpunit": "^11.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "Bhamner\\RedisStreams\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Bhamner\\RedisStreams\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Bhamner\\RedisStreams\\RedisStreamsServiceProvider"
+            ],
+            "aliases": {
+                "RedisStream": "Bhamner\\RedisStreams\\Facades\\RedisStream"
+            }
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "config": {
+        "sort-packages": true
+    }
+}
