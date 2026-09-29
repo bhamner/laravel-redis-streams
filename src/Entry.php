@@ -23,6 +23,18 @@ class Entry
         return $this->fields[$key] ?? $default;
     }
 
+    /**
+     * Milliseconds encoded in a Redis stream id, when the id has that form.
+     */
+    public function milliseconds(): ?int
+    {
+        if (! preg_match('/^(\d+)-\d+$/', $this->id, $matches)) {
+            return null;
+        }
+
+        return (int) $matches[1];
+    }
+
     public function ack(): int
     {
         if ($this->acknowledger === null) {

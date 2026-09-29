@@ -11,15 +11,7 @@ class LaravelCommandGateway implements CommandGateway
 
     public function prefix(): string
     {
-        $client = Redis::connection($this->connection)->client();
-
-        if ($client instanceof \Redis) {
-            $prefix = $client->getOption(\Redis::OPT_PREFIX);
-
-            return is_string($prefix) ? $prefix : '';
-        }
-
-        return (string) config('database.redis.options.prefix', '');
+        return ConnectionPrefix::fromClient(Redis::connection($this->connection)->client());
     }
 
     public function execute(array $arguments): mixed

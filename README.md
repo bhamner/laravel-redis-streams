@@ -2,7 +2,7 @@
 
 A Composer package for [Redis Streams](https://redis.io/docs/latest/develop/data-types/streams/) consumer groups. `create()` appends an entry. A group delivers each new entry to one consumer, and the entry stays pending until that consumer calls `ack()`.
 
-Laravel's Redis connection already forwards the raw commands (`XADD`, `XREADGROUP`, `XACK`, `XAUTOCLAIM`, and the rest). This package is the fluent layer on top of them. It works with both the PhpRedis extension and Predis, and it keeps your configured Redis key prefix.
+Laravel's Redis connection already forwards the raw commands (`XADD`, `XREADGROUP`, `XACK`, `XAUTOCLAIM`, and the rest). This package is the fluent layer on top of them. It works with both the PhpRedis extension and Predis. Stream keys use the prefix on the chosen Redis connection, including an empty prefix.
 
 ## Install
 
@@ -117,7 +117,11 @@ $claimed = OrderStream::group('billing')
 
 ## A worker
 
-Extend `Consumer` and run it with `redis-streams:work`. The command claims entries that have been pending longer than `claim_after`, reads new ones, calls `handle`, and acknowledges on success. An exception leaves the entry pending. After `max_deliveries` (default 5) the worker calls `failed()` and acknowledges the entry.
+Extend `Consumer` and run it with `redis-streams:work`. The command claims entries that have been pending longer than `claim_after`, reads new ones, calls `handle`, and acknowledges on success. An exception leaves the entry pending. After `max_deliveries` (default 5) the worker appends the entry to the dead-letter stream, calls `failed()`, and acknowledges it.
+
+Set `REDIS_STREAM_IGNORE_OLDER_THAN` to a number of hours to acknowledge older entries without calling `handle()`. Age is the timestamp in the Redis stream id. Leave it unset to keep every entry.
+
+The dead-letter stream defaults to `{stream}:dead`, so entries from `orders` land on `orders:dead`. The copy keeps the original fields and adds `dead_stream`, `dead_id`, `dead_group`, `dead_consumer`, `dead_deliveries`, `dead_error`, and `dead_failed_at`. Set `REDIS_STREAM_DEAD_LETTER` to another name, or to an empty string to disable it. `{stream}` is replaced with the source stream name.
 
 ```php
 use Bhamner\RedisStreams\Consumer;
@@ -157,8 +161,10 @@ php artisan redis-streams:work "App\Streams\BillingConsumer" --once --consumer=w
 | `count` | `REDIS_STREAM_COUNT` | `10` |
 | `claim_after` | `REDIS_STREAM_CLAIM_AFTER` | `60000` milliseconds |
 | `max_deliveries` | `REDIS_STREAM_MAX_DELIVERIES` | `5` |
+| `ignore_older_than` | `REDIS_STREAM_IGNORE_OLDER_THAN` | unset |
+| `dead_letter_stream` | `REDIS_STREAM_DEAD_LETTER` | `{stream}:dead` |
 
-Override any of those on the consumer class with `$block`, `$count`, `$claimAfter`, `$maxDeliveries`, or `$start`.
+Override any of those on the consumer class with `$block`, `$count`, `$claimAfter`, `$maxDeliveries`, `$ignoreOlderThan`, `$deadLetterStream`, or `$start`. An empty `$deadLetterStream` disables the dead letter for that consumer. `$ignoreOlderThan` of `0` keeps every entry.
 
 ## Contributing
 

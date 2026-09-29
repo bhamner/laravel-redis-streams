@@ -70,8 +70,66 @@ class ConsumerTest extends TestCase
         $worker->once();
 
         $this->assertSame(['3-0'], $worker->failedIds);
-        $commands = array_column($redis->calls, 0);
-        $this->assertContains('acknowledge', $commands);
+        $added = $this->call($redis, 'add');
+        $this->assertSame('orders:dead', $added['stream']);
+        $this->assertSame('3-0', $added['fields']['dead_id']);
+        $this->assertSame('billing down', $added['fields']['dead_error']);
+        $this->assertSame('acknowledge', $redis->calls[array_key_last($redis->calls)][0]);
+    }
+
+    public function test_worker_acknowledges_entries_older_than_the_cutoff_without_handling_them(): void
+    {
+        $redis = new FakeStreamsClient;
+        $redis->responses['readGroup'] = [
+            ['id' => '1000-0', 'fields' => ['type' => 'order.placed']],
+            ['id' => '5000000-0', 'fields' => ['type' => 'order.placed']],
+        ];
+
+        $worker = new BillingConsumer($redis);
+        $worker->clock = 5_000_000;
+        $worker->ignoreFor(1);
+        $worker->once();
+
+        $this->assertSame(['5000000-0'], $worker->handled);
+        $acknowledged = array_values(array_filter(
+            $redis->calls,
+            fn (array $call) => $call[0] === 'acknowledge',
+        ));
+        $this->assertSame(['1000-0'], $acknowledged[0][1]['ids']);
+        $this->assertSame(['5000000-0'], $acknowledged[1][1]['ids']);
+    }
+
+    public function test_worker_can_disable_the_dead_letter_stream(): void
+    {
+        $redis = new FakeStreamsClient;
+        $redis->responses['readGroup'] = [
+            ['id' => '3-0', 'fields' => ['type' => 'order.placed']],
+        ];
+        $redis->responses['pending'] = [
+            ['id' => '3-0', 'consumer' => 'worker', 'idle' => 10, 'deliveries' => 5],
+        ];
+
+        $worker = new BillingConsumer($redis);
+        $worker->fail = true;
+        $worker->deadLettersTo('');
+        $worker->once();
+
+        $this->assertSame(['3-0'], $worker->failedIds);
+        $this->assertNotContains('add', array_column($redis->calls, 0));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function call(FakeStreamsClient $redis, string $name): array
+    {
+        foreach ($redis->calls as $call) {
+            if ($call[0] === $name) {
+                return $call[1];
+            }
+        }
+
+        $this->fail("No {$name} call was recorded.");
     }
 }
 
@@ -116,6 +174,23 @@ class BillingConsumer extends Consumer
     public array $failedIds = [];
 
     public bool $fail = false;
+
+    public int $clock = 0;
+
+    public function ignoreFor(float $hours): void
+    {
+        $this->ignoreOlderThan = $hours;
+    }
+
+    public function deadLettersTo(string $stream): void
+    {
+        $this->deadLetterStream = $stream;
+    }
+
+    protected function nowMilliseconds(): int
+    {
+        return $this->clock > 0 ? $this->clock : parent::nowMilliseconds();
+    }
 
     public function __construct(FakeStreamsClient $client)
     {
