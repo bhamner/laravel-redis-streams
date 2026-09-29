@@ -57,6 +57,29 @@ class LaravelStreamsClientTest extends TestCase
         $this->assertSame(['XGROUP', 'CREATE', 'orders', 'billing', '0', 'MKSTREAM'], $gateway->commands[0]);
     }
 
+    public function test_idle_claim_uses_xpending_and_xclaim(): void
+    {
+        $gateway = new RecordingGateway(replies: [
+            [
+                ['4-0', 'other', 1000, 1],
+            ],
+            [
+                ['3-0', 'other', 70000, 2],
+            ],
+            [
+                ['3-0', ['type', 'order.placed']],
+            ],
+        ]);
+        $client = new LaravelStreamsClient($gateway);
+
+        $claimed = $client->autoClaim('orders', 'billing', 'worker-2', 60000, count: 1);
+
+        $this->assertSame('3-0', $claimed['entries'][0]['id']);
+        $this->assertSame(['XPENDING', 'orders', 'billing', '-', '+', 1], $gateway->commands[0]);
+        $this->assertSame(['XPENDING', 'orders', 'billing', '4-1', '+', 1], $gateway->commands[1]);
+        $this->assertSame(['XCLAIM', 'orders', 'billing', 'worker-2', 60000, '3-0'], $gateway->commands[2]);
+    }
+
     public function test_pending_and_autoclaim_shapes(): void
     {
         $parser = new ResponseParser;

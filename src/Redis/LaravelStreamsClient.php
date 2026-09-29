@@ -169,16 +169,75 @@ class LaravelStreamsClient implements StreamsClient
         string $start = '0-0',
         int $count = 10,
     ): array {
-        return $this->parser->autoClaim($this->gateway->execute([
-            'XAUTOCLAIM',
-            $this->key($stream),
-            $group,
-            $consumer,
-            $minIdleMilliseconds,
-            $start,
-            'COUNT',
-            $count,
-        ]));
+        $ids = $this->idlePendingIds($stream, $group, $minIdleMilliseconds, $start, $count);
+
+        if ($ids === []) {
+            return ['next' => '0-0', 'entries' => []];
+        }
+
+        return [
+            'next' => '0-0',
+            'entries' => $this->parser->entries($this->gateway->execute([
+                'XCLAIM',
+                $this->key($stream),
+                $group,
+                $consumer,
+                $minIdleMilliseconds,
+                ...$ids,
+            ])),
+        ];
+    }
+
+    /**
+     * XPENDING plus XCLAIM. XAUTOCLAIM needs Redis 6.2, and these two commands do not.
+     *
+     * @return list<string>
+     */
+    private function idlePendingIds(string $stream, string $group, int $minIdleMilliseconds, string $start, int $count): array
+    {
+        $ids = [];
+        $cursor = $start === '0-0' ? '-' : $start;
+
+        for ($page = 0; $page < 20 && count($ids) < $count; $page++) {
+            $rows = $this->pending($stream, $group, $cursor, '+', $count);
+
+            if ($rows === []) {
+                break;
+            }
+
+            foreach ($rows as $row) {
+                if ($row['idle'] >= $minIdleMilliseconds) {
+                    $ids[] = $row['id'];
+                }
+
+                if (count($ids) >= $count) {
+                    break;
+                }
+            }
+
+            if (count($ids) >= $count || count($rows) < $count) {
+                break;
+            }
+
+            $next = $this->idAfter($rows[array_key_last($rows)]['id']);
+
+            if ($next === $cursor) {
+                break;
+            }
+
+            $cursor = $next;
+        }
+
+        return $ids;
+    }
+
+    private function idAfter(string $id): string
+    {
+        if (! preg_match('/^(\d+)-(\d+)$/', $id, $matches)) {
+            return $id;
+        }
+
+        return $matches[1].'-'.((int) $matches[2] + 1);
     }
 
     public function consumers(string $stream, string $group): array

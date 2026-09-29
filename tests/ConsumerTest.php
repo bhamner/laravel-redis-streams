@@ -53,6 +53,7 @@ class ConsumerTest extends TestCase
         $commands = array_column($redis->calls, 0);
         $this->assertNotContains('acknowledge', $commands);
         $this->assertSame([], $worker->failedIds);
+        $this->assertSame(['2-0'], $worker->releasedIds);
     }
 
     public function test_worker_acks_and_fails_when_deliveries_are_exhausted(): void
@@ -118,6 +119,33 @@ class ConsumerTest extends TestCase
         $this->assertNotContains('add', array_column($redis->calls, 0));
     }
 
+    public function test_a_claim_error_is_reported_and_new_entries_are_still_read(): void
+    {
+        $redis = new FakeStreamsClient;
+        $redis->autoClaimError = new RuntimeException('XPENDING failed');
+        $redis->responses['readGroup'] = [
+            ['id' => '9-0', 'fields' => ['type' => 'order.placed']],
+        ];
+
+        $worker = new BillingConsumer($redis);
+        $processed = $worker->once();
+
+        $this->assertSame(1, $processed);
+        $this->assertSame(['9-0'], $worker->handled);
+        $this->assertSame(['XPENDING failed'], $worker->reports);
+    }
+
+    public function test_work_stops_when_max_time_is_reached(): void
+    {
+        $redis = new FakeStreamsClient;
+        $worker = new BillingConsumer($redis);
+        $worker->limitPasses = true;
+
+        $worker->work(maxSeconds: 50);
+
+        $this->assertSame(2, $worker->passes);
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -173,7 +201,17 @@ class BillingConsumer extends Consumer
     /** @var list<string> */
     public array $failedIds = [];
 
+    /** @var list<string> */
+    public array $releasedIds = [];
+
+    /** @var list<string> */
+    public array $reports = [];
+
     public bool $fail = false;
+
+    public bool $limitPasses = false;
+
+    public int $passes = 0;
 
     public int $clock = 0;
 
@@ -190,6 +228,34 @@ class BillingConsumer extends Consumer
     protected function nowMilliseconds(): int
     {
         return $this->clock > 0 ? $this->clock : parent::nowMilliseconds();
+    }
+
+    protected function currentTimestamp(): int
+    {
+        return $this->limitPasses ? $this->clock : parent::currentTimestamp();
+    }
+
+    public function once(): int
+    {
+        if (! $this->limitPasses) {
+            return parent::once();
+        }
+
+        $this->passes++;
+        $this->clock += 30;
+
+        return 0;
+    }
+
+    public function released(Entry $entry, \Throwable $exception): void
+    {
+        $this->releasedIds[] = $entry->id;
+        $this->report($exception);
+    }
+
+    protected function report(\Throwable $exception): void
+    {
+        $this->reports[] = $exception->getMessage();
     }
 
     public function __construct(FakeStreamsClient $client)

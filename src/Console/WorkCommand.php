@@ -10,10 +10,11 @@ class WorkCommand extends Command
 {
     protected $signature = 'redis-streams:work
         {consumer : Consumer class that handles entries from one group}
-        {--once : Process a single read, then exit}
-        {--consumer= : Name of this worker inside the consumer group}';
+        {--once : Claim one batch and read one batch, then exit}
+        {--max-time= : Seconds to keep reading batches before exiting}
+        {--consumer= : Stable name of this worker inside the consumer group}';
 
-    protected $description = 'Read a Redis stream consumer group, like queue:work';
+    protected $description = 'Read a Redis stream consumer group until stopped, or for --max-time seconds';
 
     private bool $shouldQuit = false;
 
@@ -41,7 +42,10 @@ class WorkCommand extends Command
             return self::SUCCESS;
         }
 
-        $worker->work(fn () => $this->shouldQuit);
+        $maxTime = $this->option('max-time');
+        $maxSeconds = is_numeric($maxTime) ? (int) $maxTime : null;
+
+        $worker->work(fn () => $this->shouldQuit, $maxSeconds);
 
         return self::SUCCESS;
     }

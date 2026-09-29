@@ -85,9 +85,15 @@ class FakeStreamsClient implements StreamsClient
         return $this->responses['pending'] ?? [];
     }
 
+    public ?\Throwable $autoClaimError = null;
+
     public function autoClaim(string $stream, string $group, string $consumer, int $minIdleMilliseconds, string $start = '0-0', int $count = 10): array
     {
         $this->calls[] = ['autoClaim', compact('stream', 'group', 'consumer', 'minIdleMilliseconds', 'start', 'count')];
+
+        if ($this->autoClaimError !== null) {
+            throw $this->autoClaimError;
+        }
 
         return $this->responses['autoClaim'] ?? ['next' => '0-0', 'entries' => []];
     }

@@ -43,6 +43,14 @@ abstract class Consumer
 
     public function failed(Entry $entry, Throwable $exception): void {}
 
+    /**
+     * Called when handle() throws and the entry stays pending for another attempt.
+     */
+    public function released(Entry $entry, Throwable $exception): void
+    {
+        $this->report($exception);
+    }
+
     public function as(string $consumer): static
     {
         $this->consumer = $consumer;
@@ -57,7 +65,14 @@ abstract class Consumer
         $group = $this->group();
         $processed = 0;
 
-        foreach ($group->claimIdle($this->claimAfter, $this->count) as $entry) {
+        try {
+            $claimed = $group->claimIdle($this->claimAfter, $this->count);
+        } catch (Throwable $exception) {
+            $this->report($exception);
+            $claimed = [];
+        }
+
+        foreach ($claimed as $entry) {
             $this->process($entry, $group);
             $processed++;
         }
@@ -73,9 +88,15 @@ abstract class Consumer
     /**
      * @param  (callable(): bool)|null  $shouldQuit
      */
-    public function work(?callable $shouldQuit = null): void
+    public function work(?callable $shouldQuit = null, ?int $maxSeconds = null): void
     {
+        $deadline = $maxSeconds === null ? null : $this->currentTimestamp() + $maxSeconds;
+
         while (! ($shouldQuit && $shouldQuit())) {
+            if ($deadline !== null && $this->currentTimestamp() >= $deadline) {
+                return;
+            }
+
             $this->once();
         }
     }
@@ -107,7 +128,11 @@ abstract class Consumer
                 $this->deadLetter($entry, $exception, $deliveries);
                 $entry->ack();
                 $this->failed($entry, $exception);
+
+                return;
             }
+
+            $this->released($entry, $exception);
         }
     }
 
@@ -184,6 +209,23 @@ abstract class Consumer
     protected function nowMilliseconds(): int
     {
         return (int) floor(microtime(true) * 1000);
+    }
+
+    protected function currentTimestamp(): int
+    {
+        return time();
+    }
+
+    protected function report(Throwable $exception): void
+    {
+        try {
+            if (! function_exists('app') || ! app()->bound('log')) {
+                return;
+            }
+
+            logger()->warning($exception->getMessage(), ['exception' => $exception]);
+        } catch (Throwable) {
+        }
     }
 
     private function configured(string $key, mixed $default = null): mixed

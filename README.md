@@ -117,7 +117,9 @@ $claimed = OrderStream::group('billing')
 
 ## A worker
 
-Extend `Consumer` and run it with `redis-streams:work`. The command claims entries that have been pending longer than `claim_after`, reads new ones, calls `handle`, and acknowledges on success. An exception leaves the entry pending. After `max_deliveries` (default 5) the worker appends the entry to the dead-letter stream, calls `failed()`, and acknowledges it.
+Extend `Consumer` and run it with `redis-streams:work`. The command claims entries that have been pending longer than `claim_after`, reads new ones, calls `handle`, and acknowledges on success. Claiming uses `XPENDING` and `XCLAIM`, which work on Redis 5 and newer. `XAUTOCLAIM` is not required.
+
+An exception before `max_deliveries` leaves the entry pending and calls `released()`. The default `released()` writes a warning to the Laravel log. After `max_deliveries` (default 5) the worker appends the entry to the dead-letter stream, calls `failed()`, and acknowledges it. A failed claim is logged, and the worker still reads new entries.
 
 Set `REDIS_STREAM_IGNORE_OLDER_THAN` to a number of hours to acknowledge older entries without calling `handle()`. Age is the timestamp in the Redis stream id. Leave it unset to keep every entry.
 
@@ -138,6 +140,11 @@ class BillingConsumer extends Consumer
         $event = $entry->event(); // OrderPlaced, when the entry was dispatched that way
     }
 
+    public function released(Entry $entry, \Throwable $exception): void
+    {
+        // another attempt will claim this entry
+    }
+
     public function failed(Entry $entry, \Throwable $exception): void
     {
         // deliveries exhausted
@@ -146,11 +153,42 @@ class BillingConsumer extends Consumer
 ```
 
 ```bash
-php artisan redis-streams:work "App\Streams\BillingConsumer"
+php artisan redis-streams:work "App\Streams\BillingConsumer" --consumer=billing
 php artisan redis-streams:work "App\Streams\BillingConsumer" --once --consumer=worker-1
 ```
 
 `SIGTERM` and `SIGINT` stop the loop when the `pcntl` extension is loaded.
+
+## Scheduler
+
+`--once` claims one batch and reads one batch, then exits. On a one-minute schedule that drains a backlog slowly. `--max-time=50` keeps reading batches for 50 seconds and then exits, so the next run is not blocked by a process that never stops. Pass a stable `--consumer`. The default name is `hostname-pid`, and a new name on every cron run is a new member of the group.
+
+```bash
+php artisan redis-streams:work "App\Streams\BillingConsumer" --consumer=billing --max-time=50
+```
+
+```php
+class BillingConsumer extends Consumer
+{
+    protected string $stream = 'orders';
+
+    protected string $group = 'billing';
+
+    protected string $start = '0';
+
+    protected ?int $count = 50;
+
+    protected ?float $ignoreOlderThan = 24;
+}
+```
+
+`$start` is `$` unless you set it, so a new group reads only entries that arrive after it is created. `0` starts at the beginning of the stream. `ignore_older_than` is off unless you set the hours. Stream ids that are not `{milliseconds}-{sequence}` are still processed.
+
+The dead-letter stream name is configurable. The fields written there stay `dead_stream`, `dead_id`, `dead_group`, `dead_consumer`, `dead_deliveries`, `dead_error`, and `dead_failed_at`, plus the original entry fields.
+
+## Redis and Predis
+
+PhpRedis and Predis both use raw commands. Predis `executeRaw` does not throw: it sets an error flag and returns the Redis error string. This package reads that flag and throws. The flag is the same in Predis 2.4 and current Predis releases, so the package does not require a newer Predis. A `BUSYGROUP` error while creating a group is ignored. Any other Redis error, including a failed acknowledge or dead-letter append, is thrown.
 
 ## Defaults
 
@@ -164,7 +202,7 @@ php artisan redis-streams:work "App\Streams\BillingConsumer" --once --consumer=w
 | `ignore_older_than` | `REDIS_STREAM_IGNORE_OLDER_THAN` | unset |
 | `dead_letter_stream` | `REDIS_STREAM_DEAD_LETTER` | `{stream}:dead` |
 
-Override any of those on the consumer class with `$block`, `$count`, `$claimAfter`, `$maxDeliveries`, `$ignoreOlderThan`, `$deadLetterStream`, or `$start`. An empty `$deadLetterStream` disables the dead letter for that consumer. `$ignoreOlderThan` of `0` keeps every entry.
+Override any of those on the consumer class with `$block`, `$count`, `$claimAfter`, `$maxDeliveries`, `$ignoreOlderThan`, `$deadLetterStream`, or `$start`. An empty `$deadLetterStream` disables the dead letter for that consumer. `$ignoreOlderThan` of `0` keeps every entry. `$start` of `0` creates the group at the beginning of the stream.
 
 ## Contributing
 
